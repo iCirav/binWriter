@@ -1,80 +1,142 @@
 #!/usr/bin/env python3
-
 import argparse
 import os
+import sys
 
-def binWriter(filename, size, fill_byte=None, use_random=False):
+def write_pattern(file_obj, size, pattern_bytes):
+    # Repeat the pattern to fill exactly `size` bytes
+    length = len(pattern_bytes)
+    if length == 0:
+        return
+    full_repeats = size // length
+    remainder = size % length
+    file_obj.write(pattern_bytes * full_repeats + pattern_bytes[:remainder])
 
-    if use_random:
-        # Generate size bytes of random data
-        padded_bytes = os.urandom(size)
-    else:
-        # Fill the entire file with the fill byte
-        padded_bytes = bytes([fill_byte]) * size
+def write_hex_string(file_obj, hex_string):
+    # Write raw bytes from a hex string (any length)
+    # strip spaces & convert
+    clean = hex_string.replace(" ", "")
+    try:
+        data = bytes.fromhex(clean)
+    except ValueError:
+        raise SystemExit("Error: Invalid hex string for --hex-input")
+    file_obj.write(data)
 
-    with open(filename, "wb") as file_obj:
-        file_obj.write(padded_bytes)
-
+def write_integers(file_obj, integers, length, endian):
+    # Write each integer with .to_bytes()
+    for num in integers:
+        if num < 0 or num >= (1 << (8 * length)):
+            raise SystemExit(
+                f"Error: Integer {num} doesn't fit in {length} bytes"
+            )
+        file_obj.write(num.to_bytes(length, byteorder=endian))
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Binary file generator.",
-        allow_abbrev=True
+        description="Binary file generator (enhanced).",
+        allow_abbrev=True,
     )
 
     parser.add_argument(
-        "-f", "--filename",
-        required=True,
-        help="Name of the file to create"
+        "-f", "--filename", required=True, help="Output file name"
     )
 
-    parser.add_argument(
-        "-s", "--size",
-        required=True,
-        type=int,
-        help="Size of the file in bytes"
-    )
+    group_mode = parser.add_mutually_exclusive_group(required=True)
 
-    # --- Mutually exclusive options: fill or random ---
-    group = parser.add_mutually_exclusive_group()
-
-    group.add_argument(
-        "-F", "--fill",
-        default="FF",
-        help="Hex byte used for padding (default: FF). Example: --fill 00"
-    )
-
-    group.add_argument(
+    # Original fill/random options
+    group_mode.add_argument(
         "-R", "--random",
         action="store_true",
-        help="Fill the file with random data instead of a fixed byte"
+        help="Fill the file with random bytes"
+    )
+    group_mode.add_argument(
+        "-F", "--fill",
+        help="Hex byte used for single-byte fill (e.g. 00, FF)"
+    )
+
+    # New modes
+    group_mode.add_argument(
+        "-P", "--pattern",
+        help="Hex pattern to repeat for file (e.g. DEADBEEF)"
+    )
+    group_mode.add_argument(
+        "-H", "--hex-input",
+        help="Write raw hex string to file (no padding)"
+    )
+    group_mode.add_argument(
+        "-I", "--integers", nargs="+",
+        type=int,
+        help="List of integers to write"
+    )
+
+    # Shared options
+    parser.add_argument(
+        "-s", "--size", type=int,
+        help="Size of file in bytes (required for fill/random/pattern modes)"
+    )
+
+    parser.add_argument(
+        "--int-bytes", type=int, default=4,
+        help="Byte length per integer (for --integers) (default: 4)"
+    )
+    parser.add_argument(
+        "--endian", choices=["little", "big"], default="little",
+        help="Endian for integer writes (default: little)"
     )
 
     args = parser.parse_args()
 
-    # If using random, ignore fill
-    if args.random:
-        fill_byte = None
-    else:
-        # Convert fill byte from hex to integer
-        try:
-            fill_byte = int(args.fill, 16)
-            if not (0 <= fill_byte <= 0xFF):
-                raise ValueError
-        except ValueError:
-            raise SystemExit("Error: --fill must be a valid hex byte (00–FF).")
+    # Ensure size is valid for modes that need it
+    if args.random or args.fill or args.pattern:
+        if args.size is None:
+            raise SystemExit("Error: --size is required for this mode")
 
-    print("Filename:", args.filename)
-    print("Size:", args.size)
-    print("Mode:", "Random" if args.random else f"Fill byte {args.fill}")
+    with open(args.filename, "wb") as f:
 
-    binWriter(
-        filename=args.filename,
-        size=args.size,
-        fill_byte=fill_byte,
-        use_random=args.random
-    )
+        # Random fill
+        if args.random:
+            f.write(os.urandom(args.size))
+            print(f"Written {args.size} random bytes.")
+
+        # Single-byte fill
+        elif args.fill:
+            # Parse fill byte
+            try:
+                b = int(args.fill, 16)
+                if b < 0 or b > 0xFF:
+                    raise ValueError
+            except ValueError:
+                raise SystemExit("Error: --fill must be hex 00–FF")
+            write_pattern(f, args.size, bytes([b]))
+            print(f"Written {args.size} bytes of fill {args.fill}.")
+
+        # Pattern mode
+        elif args.pattern:
+            # pattern string -> bytes
+            clean = args.pattern.replace(" ", "")
+            try:
+                pattern_bytes = bytes.fromhex(clean)
+            except ValueError:
+                raise SystemExit("Error: Invalid hex pattern")
+            write_pattern(f, args.size, pattern_bytes)
+            print(f"Written {args.size} bytes of repeating pattern {args.pattern}.")
+
+        # Raw hex input
+        elif args.hex_input:
+            write_hex_string(f, args.hex_input)
+            print(f"Written raw hex input.")
+
+        # Integer list write
+        elif args.integers:
+            write_integers(
+                f, args.integers, args.int_bytes, args.endian
+            )
+            print(
+                f"Written {len(args.integers)} ints "
+                f"({args.int_bytes} bytes each, {args.endian} endian)."
+            )
+
+    print("Done!")
 
 if __name__ == "__main__":
     main()
-
